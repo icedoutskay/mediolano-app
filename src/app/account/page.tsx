@@ -2,6 +2,8 @@
 
 import { useState, ChangeEvent, useEffect, useCallback } from "react";
 import { useAccount } from "@starknet-react/core";
+import { Contract } from "starknet";
+import { accountABI } from "@/abis/account";
 import {
   useAccountContract,
   type PersonalInfo,
@@ -72,7 +74,6 @@ import {
   Save,
 } from "lucide-react";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
-import { ExternalLink, CheckCircle, Info, AlertCircle } from "lucide-react";
 
 interface UploadedImages {
   avatarUrl?: string;
@@ -186,16 +187,9 @@ const INITIAL_USER_PROFILE: UserProfile = {
   },
 };
 
-// Utility function to generate Starknet explorer links
-const getStarknetExplorerUrl = (txHash: string, network: "mainnet" | "sepolia" = "sepolia") => {
-  const baseUrl = network === "mainnet" ? "https://starkscan.co/tx/" : "https://sepolia.starkscan.co/tx/"
-  return `${baseUrl}${txHash}`
-}
-
-
 export default function UserAccount() {
   // Wallet connection
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, account } = useAccount();
   const { toast } = useToast();
 
   // Account contract operations
@@ -227,7 +221,6 @@ export default function UserAccount() {
     INITIAL_USER_PROFILE.coverUrl
   );
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [coverFile, setCoverFile] = useState<File | null>(null);
@@ -378,34 +371,20 @@ export default function UserAccount() {
     const loadUserSettings = async (): Promise<void> => {
       if (!isConnected || !address) return;
 
-      setIsLoading(true)
-      if (isInitialLoad) {
-        toast({
-          title: "Loading Settings",
-          description: "Checking for your profile on the blockchain...",
-        })
-      }
-
+      setIsLoading(true);
       try {
         // Check if profile is registered first
         const profileRegistered = await isProfileRegistered(address);
 
         if (profileRegistered) {
-           toast({
-            title: "Profile Found",
-            description: "Loading your settings from the blockchain...",
-          })
-
           // Load complete profile data
-          const [profileData, personalInfo, socialLinks, settings] =
-            await Promise.all([
-              getProfile(address),
-              getPersonalInfo(address),
-              getSocialLinks(address),
-              getSettings(address),
-            ]);
+          const [profileData, personalInfo, socialLinks] = await Promise.all([
+            getProfile(address),
+            getPersonalInfo(address),
+            getSocialLinks(address),
+          ]);
 
-          if (personalInfo && socialLinks && settings) {
+          if (personalInfo && socialLinks && profileData) {
             setUser((prevUser: UserProfile) => ({
               ...prevUser,
               address: address,
@@ -429,20 +408,33 @@ export default function UserAccount() {
               },
               preferences: {
                 ...prevUser.preferences,
-                publicProfile: settings.display_public_profile || false,
-                emailNotifications: settings.email_notifications || false,
-                marketProfile: settings.marketplace_profile || false,
+                publicProfile: profileData?.display_public_profile || false,
+                emailNotifications: profileData?.email_notifications || false,
+                marketProfile: profileData?.marketplace_profile || false,
               },
             }));
-             toast({
-              title: "Settings Loaded Successfully",
-              description: "Your profile settings have been loaded from the blockchain.",
-              action: (
-                <div className="flex items-center gap-1 text-green-600">
-                  <CheckCircle className="w-4 h-4" />
-                </div>
-              ),
-            })
+          // Owner-bound settings read: call through connected wallet so contract sees caller
+          const contractAddress = process.env
+            .NEXT_PUBLIC_ACCOUNT_CONTRACT_ADDRESS as `0x${string}` | undefined;
+          if (account && contractAddress) {
+            try {
+              const ownerContract = new Contract(accountABI as any, contractAddress, account);
+              const ownerSettings = await (ownerContract as any).get_settings(address);
+              if (ownerSettings) {
+                setUser((prevUser: UserProfile) => ({
+                  ...prevUser,
+                  preferences: {
+                    ...prevUser.preferences,
+                    publicProfile: ownerSettings.display_public_profile || false,
+                    emailNotifications: ownerSettings.email_notifications || false,
+                    marketProfile: ownerSettings.marketplace_profile || false,
+                  },
+                }));
+              }
+            } catch (_) {
+              
+            }
+          }
           }
         } else {
           console.log("Profile not registered, using defaults");
@@ -450,32 +442,11 @@ export default function UserAccount() {
             ...prevUser,
             address: address,
           }));
-           toast({
-            title: "No Settings Found",
-            description: "Default options loaded. You can customize and save your profile settings.",
-            action: (
-              <div className="flex items-center gap-1 text-blue-600">
-                <Info className="w-4 h-4" />
-              </div>
-            ),
-          })
-
         }
       } catch (err) {
         console.error("Failed to load user settings:", err);
-          toast({
-          title: "Failed to Load Settings",
-          description: "There was an error loading your profile. Using default settings.",
-          variant: "destructive",
-          action: (
-            <div className="flex items-center gap-1">
-              <AlertCircle className="w-4 h-4" />
-            </div>
-          ),
-        })
       } finally {
         setIsLoading(false);
-        setIsInitialLoad(false);
       }
     };
 
@@ -488,8 +459,6 @@ export default function UserAccount() {
     getPersonalInfo,
     getSocialLinks,
     getSettings,
-    toast,
-    isInitialLoad,
   ]);
 
   // Image Upload Handlers
@@ -584,10 +553,6 @@ export default function UserAccount() {
       }
 
       // Step 2: Validation
-       toast({
-        title: "Processing Transaction",
-        description: "Saving your settings to the blockchain...",
-      })
       const validationErrors = [
         {
           field: user.name.trim(),
@@ -669,30 +634,12 @@ export default function UserAccount() {
 
       console.log("Transaction completed successfully:", transactionResult);
 
-       const txHash = transactionResult?.transaction_hash;
-      const explorerUrl = txHash ? getStarknetExplorerUrl(txHash) : null
-
       // Success handling
       toast({
         title: "Success!",
         description: profileExists
           ? "Your profile has been updated on the blockchain!"
           : "Your profile has been registered on the blockchain!",
-           action: explorerUrl ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => window.open(explorerUrl, "_blank")}
-            className="flex items-center gap-1"
-          >
-            <ExternalLink className="w-3 h-3" />
-            View on Starknet
-          </Button>
-        ) : (
-          <div className="flex items-center gap-1 text-green-600">
-            <CheckCircle className="w-4 h-4" />
-          </div>
-        ),
       });
 
       // Close drawer
@@ -729,11 +676,6 @@ export default function UserAccount() {
         title: errorTitle,
         description: errorDescription,
         variant: "destructive",
-         action: (
-          <div className="flex items-center gap-1">
-            <AlertCircle className="w-4 h-4" />
-          </div>
-        ),
       });
     }
   }, [
@@ -746,7 +688,6 @@ export default function UserAccount() {
     updateProfileMulticall,
     uploadImagesToIpfs,
     toast,
-    isProfileRegistered,
   ]);
 
   return (

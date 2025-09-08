@@ -105,8 +105,25 @@ export const useAccountContract = () => {
   const getSettings = useCallback(
     async (user: `0x${string}`) => {
       if (!contract) return null;
+      
       try {
-        return await contract.get_settings(user);
+        // return await contract.get_settings(user);
+        
+      if (typeof contract.get_settings === 'function') {
+        // return await contract.get_settings(user);
+// <CHANGE> Better address formatting that ensures exactly 66 characters
+// const addressWithoutPrefix = user.startsWith('0x') ? user.slice(2) : user;
+// const formattedUser = `0x${addressWithoutPrefix.padStart(64, '0')}`;
+// console.log("[v0] Original address:", user);
+// console.log("[v0] Formatted address:", formattedUser);
+// return await contract.get_settings(formattedUser);
+      return contract.get_settings(user);
+
+     
+      } else {
+        console.error("[v0] Settings function not found on contract");
+        return null;
+      }
       } catch (err) {
         console.error("Error getting settings:", err);
         return null;
@@ -118,8 +135,20 @@ export const useAccountContract = () => {
   const isProfileRegistered = useCallback(
     async (user: `0x${string}`) => {
       if (!contract) return false;
+      console.log("[v0] Contract methods:", Object.getOwnPropertyNames(contract));
+    console.log("[v0] Contract prototype:", Object.getOwnPropertyNames(Object.getPrototypeOf(contract)));
       try {
+        // return await contract.is_profile_registered(user);
+        // Try different possible function names
+      if (typeof contract.is_profile_registered === 'function') {
         return await contract.is_profile_registered(user);
+      } else if (typeof contract.get_profile === 'function') {
+        const result = await contract.get_profile(user);
+        return result !== null && result !== undefined;
+      } else {
+        console.error("[v0] Function not found on contract");
+        return false;
+      }
       } catch (err) {
         console.error("Error checking profile registration:", err);
         return false;
